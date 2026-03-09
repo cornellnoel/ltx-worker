@@ -1,0 +1,4 @@
+# Additional dependencies installed on top of LTX-2's own deps
+# These are pip-installed into the LTX-2 venv during Docker build
+runpod>=1.7.0
+requests>=2.31.0
