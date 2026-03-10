@@ -95,8 +95,10 @@ def load_pipeline():
     import torch
 
     sys.path.insert(0, LTX_REPO)
-    from ltx_core.quantization import QuantizationPolicy
+    # Import DistilledPipeline FIRST — it resolves a circular import
+    # between ltx_core.quantization and ltx_core.loader
     from ltx_pipelines.distilled import DistilledPipeline
+    from ltx_core.quantization import QuantizationPolicy
 
     ensure_models()
 
