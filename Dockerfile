@@ -1,37 +1,22 @@
 # RunPod Serverless Worker for LTX-2.3 Video Generation
 #
-# Models are NOT in this image — they load from a network volume at /runpod-volume/models/
-# This keeps the image small (~8-10GB) and rebuilds fast.
-#
-# Build:   docker build -t ltx-worker .
-# Push:    docker tag ltx-worker <registry>/ltx-worker:latest && docker push <registry>/ltx-worker:latest
-# Deploy:  Create Serverless endpoint on RunPod, attach network volume, set Docker image
+# Uses runpod/base (NOT nvidia/cuda) — includes RunPod's serverless infrastructure.
+# Models auto-download on first job, cached by FlashBoot after that.
 
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+FROM runpod/base:1.0.3-cuda1281-ubuntu2204
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# Python 3.12 from deadsnakes PPA (LTX-2 requires >= 3.12)
+# Install system deps
 RUN apt-get update && \
-    apt-get install -y software-properties-common && \
-    add-apt-repository ppa:deadsnakes/ppa && \
-    apt-get update && \
-    apt-get install -y \
-        python3.12 python3.12-dev python3.12-venv \
-        git curl wget ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 && \
-    update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
+    apt-get install -y ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install uv (fast Python package manager, used by LTX-2)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
-# Clone LTX-2 repo and install all dependencies
-# Pin to a specific commit for reproducibility (update as needed)
+# Clone LTX-2 repo and install all dependencies into the system Python
 WORKDIR /app
 RUN git clone --depth 1 https://github.com/Lightricks/LTX-2.git
 
