@@ -48,6 +48,24 @@ MODEL_FILES = {
 GEMMA_REPO = "unsloth/gemma-3-12b-it"  # Ungated mirror
 
 
+def download_file(url, dest):
+    """Download a large file with progress logging."""
+    import requests as req
+
+    print(f"[LTX]   Downloading to {dest}...")
+    resp = req.get(url, stream=True, timeout=600)
+    resp.raise_for_status()
+    total = int(resp.headers.get("content-length", 0))
+    downloaded = 0
+    with open(dest, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=64 * 1024 * 1024):
+            f.write(chunk)
+            downloaded += len(chunk)
+            if total > 0:
+                pct = downloaded * 100 // total
+                print(f"[LTX]   {downloaded // (1024*1024)}MB / {total // (1024*1024)}MB ({pct}%)")
+
+
 def ensure_models():
     """Download models if not present. First cold start only (~15 min)."""
     os.makedirs(MODEL_ROOT, exist_ok=True)
@@ -58,7 +76,7 @@ def ensure_models():
             print(f"[LTX] Found {filename}")
             continue
         print(f"[LTX] Downloading {filename}...")
-        subprocess.run(["wget", "-q", "-O", path, url], check=True)
+        download_file(url, path)
         print(f"[LTX] Downloaded {filename}")
 
     gemma_dir = os.path.join(MODEL_ROOT, "gemma-3-12b-it")

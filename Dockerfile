@@ -37,7 +37,7 @@ RUN git clone --depth 1 https://github.com/Lightricks/LTX-2.git
 
 WORKDIR /app/LTX-2
 RUN uv sync --extra xformers || uv sync
-RUN uv pip install runpod requests
+RUN uv pip install runpod requests huggingface_hub
 
 # Copy handler
 COPY handler.py /app/handler.py
