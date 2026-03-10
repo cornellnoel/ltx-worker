@@ -2,7 +2,7 @@
 RunPod Serverless Handler for LTX-2.3 Video Generation.
 
 Uses DistilledPipeline (8-step inference) from Lightricks/LTX-2.
-Models loaded from network volume at /runpod-volume/models/.
+Models auto-downloaded on first startup, then cached by FlashBoot.
 """
 
 import os
@@ -10,6 +10,7 @@ import sys
 import time
 import random
 import tempfile
+import subprocess
 
 import torch
 import runpod
@@ -39,7 +40,41 @@ RESOLUTION_MAP = {
     ("2160p", "9:16"): (2176, 3840),
 }
 
+# Model files and their download sources
+MODEL_FILES = {
+    "ltx-2.3-22b-distilled.safetensors": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled.safetensors",
+    "ltx-2.3-spatial-upscaler-x2-1.0.safetensors": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.0.safetensors",
+}
+GEMMA_REPO = "unsloth/gemma-3-12b-it"  # Ungated mirror
+
+
+def ensure_models():
+    """Download models if not present. First cold start only (~15 min)."""
+    os.makedirs(MODEL_ROOT, exist_ok=True)
+
+    for filename, url in MODEL_FILES.items():
+        path = os.path.join(MODEL_ROOT, filename)
+        if os.path.exists(path):
+            print(f"[LTX] Found {filename}")
+            continue
+        print(f"[LTX] Downloading {filename}...")
+        subprocess.run(["wget", "-q", "-O", path, url], check=True)
+        print(f"[LTX] Downloaded {filename}")
+
+    gemma_dir = os.path.join(MODEL_ROOT, "gemma-3-12b-it")
+    if os.path.isdir(gemma_dir) and os.listdir(gemma_dir):
+        print("[LTX] Found Gemma 3 text encoder")
+    else:
+        print("[LTX] Downloading Gemma 3 12B text encoder...")
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(GEMMA_REPO, local_dir=gemma_dir)
+        print("[LTX] Downloaded Gemma 3 text encoder")
+
+
 # ── Model Loading (runs once on worker startup, stays in VRAM) ──────────────
+
+ensure_models()
 
 print("[LTX] Loading DistilledPipeline...")
 load_start = time.time()
