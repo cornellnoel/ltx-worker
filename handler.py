@@ -2,7 +2,11 @@
 RunPod Serverless Handler for LTX-2.3 Video Generation.
 
 Uses DistilledPipeline (8-step inference) from Lightricks/LTX-2.
-Models auto-downloaded on first startup, then cached by FlashBoot.
+Models auto-downloaded on first job, then cached by FlashBoot.
+
+Key design: runpod.serverless.start() is called IMMEDIATELY at startup
+(no model loading). Models download and load lazily on the first job.
+This avoids RunPod's worker initialization timeout.
 """
 
 import os
@@ -10,27 +14,14 @@ import sys
 import time
 import random
 import tempfile
-import subprocess
 
-import torch
 import runpod
-
-# Ensure LTX-2 packages are importable
-LTX_REPO = os.getenv("LTX_REPO_PATH", "/app/LTX-2")
-sys.path.insert(0, LTX_REPO)
-
-from ltx_core.quantization import QuantizationPolicy
-from ltx_core.model.video_vae import TilingConfig, get_video_chunks_number
-from ltx_pipelines.distilled import DistilledPipeline
-from ltx_pipelines.utils.media_io import encode_video
-from ltx_pipelines.utils.args import ImageConditioningInput
 
 # ── Config ──────────────────────────────────────────────────────────────────
 
 MODEL_ROOT = os.getenv("MODEL_ROOT", "/runpod-volume/models")
+LTX_REPO = os.getenv("LTX_REPO_PATH", "/app/LTX-2")
 
-# Resolution map: (resolution, aspect_ratio) → (width, height)
-# All dimensions divisible by 64 for clean two-stage processing
 RESOLUTION_MAP = {
     ("1080p", "16:9"): (1920, 1088),
     ("1080p", "9:16"): (1088, 1920),
@@ -40,20 +31,24 @@ RESOLUTION_MAP = {
     ("2160p", "9:16"): (2176, 3840),
 }
 
-# Model files and their download sources
 MODEL_FILES = {
     "ltx-2.3-22b-distilled.safetensors": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled.safetensors",
     "ltx-2.3-spatial-upscaler-x2-1.0.safetensors": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.0.safetensors",
 }
-GEMMA_REPO = "unsloth/gemma-3-12b-it"  # Ungated mirror
+GEMMA_REPO = "unsloth/gemma-3-12b-it"
 
+# Global pipeline (lazy-loaded on first job)
+pipeline = None
+
+
+# ── Model Download + Load ───────────────────────────────────────────────────
 
 def download_file(url, dest):
     """Download a large file with progress logging."""
     import requests as req
 
     print(f"[LTX]   Downloading to {dest}...")
-    resp = req.get(url, stream=True, timeout=600)
+    resp = req.get(url, stream=True, timeout=1800)
     resp.raise_for_status()
     total = int(resp.headers.get("content-length", 0))
     downloaded = 0
@@ -67,7 +62,7 @@ def download_file(url, dest):
 
 
 def ensure_models():
-    """Download models if not present. First cold start only (~15 min)."""
+    """Download models if not present."""
     os.makedirs(MODEL_ROOT, exist_ok=True)
 
     for filename, url in MODEL_FILES.items():
@@ -90,41 +85,49 @@ def ensure_models():
         print("[LTX] Downloaded Gemma 3 text encoder")
 
 
-# ── Model Loading (runs once on worker startup, stays in VRAM) ──────────────
+def load_pipeline():
+    """Load the DistilledPipeline into GPU memory."""
+    global pipeline
 
-ensure_models()
+    if pipeline is not None:
+        return
 
-print("[LTX] Loading DistilledPipeline...")
-load_start = time.time()
+    import torch
 
-pipeline = DistilledPipeline(
-    distilled_checkpoint_path=os.path.join(MODEL_ROOT, "ltx-2.3-22b-distilled.safetensors"),
-    gemma_root=os.path.join(MODEL_ROOT, "gemma-3-12b-it"),
-    spatial_upsampler_path=os.path.join(MODEL_ROOT, "ltx-2.3-spatial-upscaler-x2-1.0.safetensors"),
-    loras=[],
-    device=torch.device("cuda"),
-    quantization=QuantizationPolicy.fp8_cast(),
-)
+    sys.path.insert(0, LTX_REPO)
+    from ltx_core.quantization import QuantizationPolicy
+    from ltx_pipelines.distilled import DistilledPipeline
 
-print(f"[LTX] Pipeline loaded in {time.time() - load_start:.1f}s")
+    ensure_models()
+
+    print("[LTX] Loading DistilledPipeline...")
+    load_start = time.time()
+
+    pipeline = DistilledPipeline(
+        distilled_checkpoint_path=os.path.join(MODEL_ROOT, "ltx-2.3-22b-distilled.safetensors"),
+        gemma_root=os.path.join(MODEL_ROOT, "gemma-3-12b-it"),
+        spatial_upsampler_path=os.path.join(MODEL_ROOT, "ltx-2.3-spatial-upscaler-x2-1.0.safetensors"),
+        loras=[],
+        device=torch.device("cuda"),
+        quantization=QuantizationPolicy.fp8_cast(),
+    )
+
+    print(f"[LTX] Pipeline loaded in {time.time() - load_start:.1f}s")
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
-def compute_num_frames(duration: float, fps: int) -> int:
-    """Compute frame count rounded to nearest valid value (8n + 1)."""
+def compute_num_frames(duration, fps):
     target = int(duration * fps)
     n = round((target - 1) / 8)
     return max(8 * n + 1, 9)
 
 
-def resolve_dimensions(resolution: str, aspect_ratio: str) -> tuple[int, int]:
-    """Map resolution + aspect_ratio to (width, height) pixels."""
+def resolve_dimensions(resolution, aspect_ratio):
     return RESOLUTION_MAP.get((resolution, aspect_ratio), (1920, 1088))
 
 
-def download_image(url: str) -> str:
-    """Download image from URL to temp file, return path."""
+def download_image(url):
     import requests as req
 
     resp = req.get(url, timeout=60)
@@ -137,7 +140,6 @@ def download_image(url: str) -> str:
 
 
 def cleanup_files(*paths):
-    """Silently remove temp files."""
     for p in paths:
         if p:
             try:
@@ -149,14 +151,21 @@ def cleanup_files(*paths):
 # ── Handler ─────────────────────────────────────────────────────────────────
 
 def handler(job):
-    """Process a video generation request."""
+    """Process a video generation request. Lazy-loads models on first call."""
     job_input = job["input"]
     job_id = job.get("id", "unknown")
 
-    # Parse input
     prompt = job_input.get("prompt", "").strip()
     if not prompt:
         return {"error": "prompt is required"}
+
+    # Lazy load pipeline on first job
+    load_pipeline()
+
+    # Import LTX-2 modules (available after load_pipeline sets up sys.path)
+    from ltx_core.model.video_vae import TilingConfig, get_video_chunks_number
+    from ltx_pipelines.utils.media_io import encode_video
+    from ltx_pipelines.utils.args import ImageConditioningInput
 
     duration = float(job_input.get("duration", 6))
     resolution = job_input.get("resolution", "1080p")
@@ -234,7 +243,7 @@ def handler(job):
         cleanup_files(output_path, *temp_files)
         return {"error": f"Generation failed: {str(e)}"}
 
-    # Upload to S3 (RunPod's built-in bucket, URLs valid for 7 days)
+    # Upload to S3
     video_url = None
     try:
         from runpod.serverless.utils import rp_upload
@@ -243,7 +252,6 @@ def handler(job):
     except Exception as e:
         print(f"[LTX] S3 upload failed: {e}")
 
-    # Cleanup
     cleanup_files(output_path, *temp_files)
 
     if not video_url:
@@ -261,4 +269,7 @@ def handler(job):
     }
 
 
+# ── Start handler immediately (no model loading at startup) ─────────────────
+
+print("[LTX] Handler starting (models load on first job)...")
 runpod.serverless.start({"handler": handler})
