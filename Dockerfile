@@ -1,8 +1,7 @@
-# Minimal test — does the simplest possible serverless handler work?
-FROM runpod/base:1.0.3-cuda1281-ubuntu2204
+FROM runpod/base:0.6.3-cuda11.8.0
 
 RUN pip install runpod
 
-RUN echo 'import runpod\nprint("ALIVE")\nrunpod.serverless.start({"handler": lambda job: {"result": "hello"}})' > /handler.py
+COPY handler_minimal.py /handler.py
 
 CMD ["python", "-u", "/handler.py"]
