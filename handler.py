@@ -33,7 +33,8 @@ RESOLUTION_MAP = {
 
 MODEL_FILES = {
     "ltx-2.3-22b-distilled.safetensors": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled.safetensors",
-    "ltx-2.3-spatial-upscaler-x2-1.0.safetensors": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.0.safetensors",
+    # Spatial upscaler disabled to save VRAM — enable when >80GB available
+    # "ltx-2.3-spatial-upscaler-x2-1.0.safetensors": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.0.safetensors",
 }
 GEMMA_REPO = "unsloth/gemma-3-12b-it"
 
@@ -108,7 +109,7 @@ def load_pipeline():
     pipeline = DistilledPipeline(
         distilled_checkpoint_path=os.path.join(MODEL_ROOT, "ltx-2.3-22b-distilled.safetensors"),
         gemma_root=os.path.join(MODEL_ROOT, "gemma-3-12b-it"),
-        spatial_upsampler_path=os.path.join(MODEL_ROOT, "ltx-2.3-spatial-upscaler-x2-1.0.safetensors"),
+        spatial_upsampler_path=None,
         loras=[],
         device=torch.device("cuda"),
         quantization=QuantizationPolicy.fp8_cast(),
