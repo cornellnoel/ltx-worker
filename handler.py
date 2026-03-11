@@ -1,7 +1,10 @@
 """
 RunPod Serverless Handler for LTX-2.3 Video Generation.
 
-Uses DistilledPipeline (8-step inference) from Lightricks/LTX-2.
+Supports two modes:
+  - "fast" (default): DistilledPipeline, 8-step inference, ~30s generation
+  - "lora": Dev model with LoRA weights, higher quality, ~2min generation
+
 Models auto-downloaded on first job, then cached by FlashBoot.
 
 Key design: runpod.serverless.start() is called IMMEDIATELY at startup
@@ -33,13 +36,13 @@ RESOLUTION_MAP = {
 
 MODEL_FILES = {
     "ltx-2.3-22b-distilled.safetensors": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled.safetensors",
-    # Spatial upscaler disabled to save VRAM — enable when >80GB available
-    # "ltx-2.3-spatial-upscaler-x2-1.0.safetensors": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.0.safetensors",
+    "ltx-2.3-spatial-upscaler-x2-1.0.safetensors": "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.0.safetensors",
 }
 GEMMA_REPO = "unsloth/gemma-3-12b-it"
 
-# Global pipeline (lazy-loaded on first job)
+# Global state
 pipeline = None
+current_mode = None
 
 
 # ── Model Download + Load ───────────────────────────────────────────────────
@@ -86,14 +89,20 @@ def ensure_models():
         print("[LTX] Downloaded Gemma 3 text encoder")
 
 
-def load_pipeline():
-    """Load the DistilledPipeline into GPU memory."""
-    global pipeline
+def load_pipeline(mode="fast", loras=None):
+    """Load or swap the pipeline based on mode."""
+    global pipeline, current_mode
+    import torch
 
-    if pipeline is not None:
+    if pipeline is not None and current_mode == mode:
         return
 
-    import torch
+    # Unload existing pipeline if switching modes
+    if pipeline is not None:
+        print(f"[LTX] Unloading {current_mode} pipeline to switch to {mode}...")
+        del pipeline
+        pipeline = None
+        torch.cuda.empty_cache()
 
     sys.path.insert(0, LTX_REPO)
     # Import DistilledPipeline FIRST — it resolves a circular import
@@ -103,19 +112,31 @@ def load_pipeline():
 
     ensure_models()
 
-    print("[LTX] Loading DistilledPipeline...")
-    load_start = time.time()
+    if mode == "fast":
+        print("[LTX] Loading DistilledPipeline (fast mode)...")
+        load_start = time.time()
 
-    pipeline = DistilledPipeline(
-        distilled_checkpoint_path=os.path.join(MODEL_ROOT, "ltx-2.3-22b-distilled.safetensors"),
-        gemma_root=os.path.join(MODEL_ROOT, "gemma-3-12b-it"),
-        spatial_upsampler_path=None,
-        loras=[],
-        device=torch.device("cuda"),
-        quantization=QuantizationPolicy.fp8_cast(),
-    )
+        pipeline = DistilledPipeline(
+            distilled_checkpoint_path=os.path.join(MODEL_ROOT, "ltx-2.3-22b-distilled.safetensors"),
+            gemma_root=os.path.join(MODEL_ROOT, "gemma-3-12b-it"),
+            spatial_upsampler_path=os.path.join(MODEL_ROOT, "ltx-2.3-spatial-upscaler-x2-1.0.safetensors"),
+            loras=[],
+            device=torch.device("cuda"),
+            quantization=QuantizationPolicy.fp8_cast(),
+        )
 
-    print(f"[LTX] Pipeline loaded in {time.time() - load_start:.1f}s")
+        print(f"[LTX] Fast pipeline loaded in {time.time() - load_start:.1f}s")
+        current_mode = "fast"
+
+    elif mode == "lora":
+        # TODO: Dev model + LoRA support
+        # Will use the dev checkpoint with user-specified LoRA weights
+        print("[LTX] LoRA mode not yet implemented, falling back to fast mode")
+        load_pipeline("fast")
+        return
+
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -162,8 +183,10 @@ def handler(job):
     if not prompt:
         return {"error": "prompt is required"}
 
-    # Lazy load pipeline on first job
-    load_pipeline()
+    mode = job_input.get("mode", "fast")
+
+    # Lazy load pipeline on first job (or swap if mode changed)
+    load_pipeline(mode)
 
     # Import LTX-2 modules (available after load_pipeline sets up sys.path)
     from ltx_core.model.video_vae import TilingConfig, get_video_chunks_number
@@ -183,7 +206,7 @@ def handler(job):
     width, height = resolve_dimensions(resolution, aspect_ratio)
     num_frames = compute_num_frames(duration, fps)
 
-    print(f"[LTX] Job {job_id}: {width}x{height}, {num_frames}f @ {fps}fps, seed={seed}")
+    print(f"[LTX] Job {job_id}: {width}x{height}, {num_frames}f @ {fps}fps, seed={seed}, mode={mode}")
 
     # Image conditioning (i2v mode)
     images = []
