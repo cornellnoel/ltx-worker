@@ -2,7 +2,11 @@
 
 RunPod Serverless worker for [LTX-2.3](https://huggingface.co/Lightricks/LTX-2.3) video generation.
 
-Uses the DistilledPipeline (8-step inference) with FP8 quantization on 80GB GPUs.
+Uses the DistilledPipeline (8-step inference) with FP8 quantization and spatial 2x upscaling on 96GB GPUs.
+
+Supports two modes:
+- **fast** (default): Distilled model, 8-step inference, ~30s generation
+- **lora** (coming soon): Dev model with LoRA weights for trained styles
 
 ## How it works
 
@@ -41,6 +45,7 @@ curl "https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}" \
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `prompt` | string | *required* | Video description |
+| `mode` | string | "fast" | "fast" (distilled) or "lora" (dev + LoRA, coming soon) |
 | `duration` | float | 6 | Duration in seconds |
 | `resolution` | string | "1080p" | "1080p", "1440p", or "2160p" |
 | `fps` | int | 25 | Frames per second |
@@ -69,7 +74,7 @@ curl "https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}" \
 
 ### Prerequisites
 
-- RunPod account with 80GB GPU tier enabled (A100/H100)
+- RunPod account with 96GB GPU tier enabled (RTX PRO 6000 Blackwell)
 - GitHub repo with Actions enabled (builds Docker image automatically)
 
 ### Setup
@@ -77,7 +82,7 @@ curl "https://api.runpod.ai/v2/{endpoint_id}/status/{job_id}" \
 1. Push to `main` — GitHub Actions builds and pushes the Docker image to GHCR
 2. Create a Serverless endpoint in RunPod console:
    - Container image: `ghcr.io/cornellnoel/ltx-worker:latest`
-   - GPU: 80GB (48GB will OOM)
+   - GPU: 96GB (80GB OOMs with upscaler, 48GB OOMs entirely)
    - Execution timeout: 600s+
    - Container disk: 150GB
 3. First job will take ~15-20 min (model download). Enable FlashBoot after first success.
@@ -103,5 +108,5 @@ Job request → RunPod Serverless → handler.py
 ## Known issues
 
 - LTX-2 has a circular import: `DistilledPipeline` must be imported before `QuantizationPolicy`
-- 48GB GPUs OOM loading the model — 80GB minimum required
+- 80GB GPUs OOM during generation with spatial upscaler — 96GB minimum required
 - First cold start takes 15-20 min (model download); FlashBoot eliminates this after first run
