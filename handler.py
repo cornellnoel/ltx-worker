@@ -176,6 +176,17 @@ def cleanup_files(*paths):
 
 def handler(job):
     """Process a video generation request. Lazy-loads models on first call."""
+    try:
+        return _handler_inner(job)
+    except Exception as e:
+        import traceback
+        err = traceback.format_exc()
+        print(f"[LTX] FATAL handler error: {e}", flush=True)
+        print(f"[LTX] Traceback:\n{err}", flush=True)
+        return {"error": f"Handler crashed: {str(e)}", "traceback": err}
+
+
+def _handler_inner(job):
     job_input = job["input"]
     job_id = job.get("id", "unknown")
 
@@ -297,5 +308,17 @@ def handler(job):
 
 # ── Start handler immediately (no model loading at startup) ─────────────────
 
-print("[LTX] Handler starting (models load on first job)...")
+print("[LTX] Handler starting (models load on first job)...", flush=True)
+
+# Log GPU/CUDA info at startup for diagnostics
+try:
+    import torch
+    print(f"[LTX] PyTorch {torch.__version__}", flush=True)
+    print(f"[LTX] CUDA available: {torch.cuda.is_available()}", flush=True)
+    if torch.cuda.is_available():
+        print(f"[LTX] GPU: {torch.cuda.get_device_name(0)}", flush=True)
+        print(f"[LTX] VRAM: {torch.cuda.get_device_properties(0).total_memory // (1024**3)}GB", flush=True)
+except Exception as e:
+    print(f"[LTX] GPU info failed: {e}", flush=True)
+
 runpod.serverless.start({"handler": handler})
