@@ -48,3 +48,19 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Cycle RunPod workers to pull new image
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+        run: |
+          echo "Setting workers to 0..."
+          curl -s -X POST "https://api.runpod.io/graphql?api_key=$RUNPOD_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"mutation { saveEndpoint(input: { id: \"pl55m2pmxm6t6v\", name: \"relevant_blue_swallow -fb\", gpuIds: \"NVIDIA RTX PRO 6000 Blackwell\", workersMax: 0 }) { id } }"}'
+          echo "Waiting 30s..."
+          sleep 30
+          echo "Setting workers to 1..."
+          curl -s -X POST "https://api.runpod.io/graphql?api_key=$RUNPOD_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"query":"mutation { saveEndpoint(input: { id: \"pl55m2pmxm6t6v\", name: \"relevant_blue_swallow -fb\", gpuIds: \"NVIDIA RTX PRO 6000 Blackwell\", workersMax: 1 }) { id } }"}'
+          echo "Workers cycled. New image will be pulled on next job."
