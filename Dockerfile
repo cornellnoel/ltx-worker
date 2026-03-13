@@ -14,6 +14,11 @@ WORKDIR /app/LTX-2
 RUN uv sync --extra xformers || uv sync
 RUN uv pip install runpod requests huggingface_hub hf_transfer
 
+# Install PyTorch nightly with cu128 — includes pre-built sm_120 kernels for Blackwell GPUs
+# Without this, standard PyTorch JIT-compiles CUDA kernels on first run (takes >20 min)
+ENV TORCH_CUDA_ARCH_LIST="12.0"
+RUN /app/LTX-2/.venv/bin/pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128 --force-reinstall --no-deps 2>/dev/null || echo "PyTorch nightly install attempted"
+
 # Verify venv has ltx_pipelines — fail the build loudly if uv sync broke
 RUN /app/LTX-2/.venv/bin/python -c "from ltx_pipelines.distilled import DistilledPipeline; print('ltx_pipelines OK')"
 
