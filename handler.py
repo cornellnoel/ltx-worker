@@ -26,6 +26,9 @@ MODEL_ROOT = os.getenv("MODEL_ROOT", "/runpod-volume/models")
 LTX_REPO = os.getenv("LTX_REPO_PATH", "/app/LTX-2")
 
 RESOLUTION_MAP = {
+    ("480p", "16:9"): (848, 480),
+    ("480p", "9:16"): (480, 848),
+    ("480p", "1:1"): (512, 512),
     ("720p", "16:9"): (1280, 720),
     ("720p", "9:16"): (720, 1280),
     ("720p", "1:1"): (768, 768),
@@ -152,7 +155,11 @@ def compute_num_frames(duration, fps):
 
 
 def resolve_dimensions(resolution, aspect_ratio):
-    return RESOLUTION_MAP.get((resolution, aspect_ratio), (1920, 1088))
+    dims = RESOLUTION_MAP.get((resolution, aspect_ratio))
+    if dims is None:
+        print(f"[LTX] WARNING: No resolution entry for ({resolution}, {aspect_ratio}), falling back to 720p 16:9", flush=True)
+        dims = (1280, 720)
+    return dims
 
 
 def download_image(url):
