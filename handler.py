@@ -124,26 +124,40 @@ def load_pipeline(mode="fast", loras=None):
         print("[LTX] Loading DistilledPipeline (fast mode)...")
         load_start = time.time()
 
-        # Use StateDictRegistry to cache the 43GB checkpoint across model builders.
-        # Without this, each builder (transformer, video encoder, etc.) loads the
-        # full checkpoint independently, causing ~2x memory usage.
-        # Registry also enables CPU-first model building (models moved to GPU on demand).
         from ltx_core.loader.registry import StateDictRegistry
+        from ltx_pipelines.utils.model_ledger import ModelLedger
 
         registry = StateDictRegistry()
 
+        # Create ModelLedger directly with StateDictRegistry to ensure
+        # CPU-first model building from the start (not post-hoc injection).
+        checkpoint_path = os.path.join(MODEL_ROOT, "ltx-2.3-22b-distilled.safetensors")
+        gemma_root = os.path.join(MODEL_ROOT, "gemma-3-12b-it")
+        upsampler_path = os.path.join(MODEL_ROOT, "ltx-2.3-spatial-upscaler-x2-1.0.safetensors")
+
         pipeline = DistilledPipeline(
-            distilled_checkpoint_path=os.path.join(MODEL_ROOT, "ltx-2.3-22b-distilled.safetensors"),
-            gemma_root=os.path.join(MODEL_ROOT, "gemma-3-12b-it"),
-            spatial_upsampler_path=os.path.join(MODEL_ROOT, "ltx-2.3-spatial-upscaler-x2-1.0.safetensors"),
+            distilled_checkpoint_path=checkpoint_path,
+            gemma_root=gemma_root,
+            spatial_upsampler_path=upsampler_path,
             loras=[],
             device=torch.device("cuda"),
             quantization=QuantizationPolicy.fp8_cast(),
         )
-        # Inject the registry into the model ledger
-        pipeline.model_ledger.registry = registry
-        pipeline.model_ledger.build_model_builders()
+        # Replace the ModelLedger with one that uses StateDictRegistry
+        pipeline.model_ledger = ModelLedger(
+            dtype=torch.bfloat16,
+            device=torch.device("cuda"),
+            checkpoint_path=checkpoint_path,
+            gemma_root_path=gemma_root,
+            spatial_upsampler_path=upsampler_path,
+            loras=(),
+            registry=registry,
+            quantization=QuantizationPolicy.fp8_cast(),
+        )
 
+        print(f"[LTX] Registry: {type(pipeline.model_ledger.registry).__name__}", flush=True)
+        print(f"[LTX] Target device: {pipeline.model_ledger._target_device()}", flush=True)
+        print(f"[LTX] VRAM after pipeline init: {torch.cuda.memory_allocated() / (1024**3):.2f} GiB", flush=True)
         print(f"[LTX] Fast pipeline loaded in {time.time() - load_start:.1f}s")
         current_mode = "fast"
 
@@ -170,7 +184,7 @@ def resolve_dimensions(resolution, aspect_ratio):
     dims = RESOLUTION_MAP.get((resolution, aspect_ratio))
     if dims is None:
         print(f"[LTX] WARNING: No resolution entry for ({resolution}, {aspect_ratio}), falling back to 720p 16:9", flush=True)
-        dims = (1280, 720)
+        dims = (1280, 704)
     return dims
 
 
@@ -267,6 +281,9 @@ def _handler_inner(job):
     # Generate
     gen_start = time.time()
     output_path = f"/tmp/ltx_{job_id}.mp4"
+
+    import torch as _torch
+    print(f"[LTX] VRAM before generation: {_torch.cuda.memory_allocated() / (1024**3):.2f} GiB", flush=True)
 
     try:
         tiling_config = TilingConfig.default()
