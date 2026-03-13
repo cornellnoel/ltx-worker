@@ -14,6 +14,9 @@ WORKDIR /app/LTX-2
 RUN uv sync --extra xformers || uv sync
 RUN uv pip install runpod requests huggingface_hub hf_transfer
 
+# Verify venv has ltx_pipelines — fail the build loudly if uv sync broke
+RUN /app/LTX-2/.venv/bin/python -c "from ltx_pipelines.distilled import DistilledPipeline; print('ltx_pipelines OK')"
+
 COPY handler.py /app/handler.py
 
 WORKDIR /app
