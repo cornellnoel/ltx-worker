@@ -26,11 +26,12 @@ MODEL_ROOT = os.getenv("MODEL_ROOT", "/runpod-volume/models")
 LTX_REPO = os.getenv("LTX_REPO_PATH", "/app/LTX-2")
 
 RESOLUTION_MAP = {
-    ("480p", "16:9"): (848, 480),
-    ("480p", "9:16"): (480, 848),
+    # All dimensions must be multiples of 64 (LTX-2 two-stage pipeline requirement)
+    ("480p", "16:9"): (832, 448),
+    ("480p", "9:16"): (448, 832),
     ("480p", "1:1"): (512, 512),
-    ("720p", "16:9"): (1280, 720),
-    ("720p", "9:16"): (720, 1280),
+    ("720p", "16:9"): (1280, 704),
+    ("720p", "9:16"): (704, 1280),
     ("720p", "1:1"): (768, 768),
     ("1080p", "16:9"): (1920, 1088),
     ("1080p", "9:16"): (1088, 1920),
