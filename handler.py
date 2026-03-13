@@ -124,6 +124,14 @@ def load_pipeline(mode="fast", loras=None):
         print("[LTX] Loading DistilledPipeline (fast mode)...")
         load_start = time.time()
 
+        # Use StateDictRegistry to cache the 43GB checkpoint across model builders.
+        # Without this, each builder (transformer, video encoder, etc.) loads the
+        # full checkpoint independently, causing ~2x memory usage.
+        # Registry also enables CPU-first model building (models moved to GPU on demand).
+        from ltx_core.loader.registry import StateDictRegistry
+
+        registry = StateDictRegistry()
+
         pipeline = DistilledPipeline(
             distilled_checkpoint_path=os.path.join(MODEL_ROOT, "ltx-2.3-22b-distilled.safetensors"),
             gemma_root=os.path.join(MODEL_ROOT, "gemma-3-12b-it"),
@@ -132,6 +140,9 @@ def load_pipeline(mode="fast", loras=None):
             device=torch.device("cuda"),
             quantization=QuantizationPolicy.fp8_cast(),
         )
+        # Inject the registry into the model ledger
+        pipeline.model_ledger.registry = registry
+        pipeline.model_ledger.build_model_builders()
 
         print(f"[LTX] Fast pipeline loaded in {time.time() - load_start:.1f}s")
         current_mode = "fast"
